@@ -2,7 +2,9 @@
 
 A configurable, explainable risk-scoring engine for real-world-asset (RWA) underwriting.
 
-`@ledgeroxyz/risk-sdk` is a small, dependency-free TypeScript library that turns structured facts about an asset — an invoice, a receivable pool, a property, an inventory pool — into a **0-100 risk score**, a **risk tier** (`low` / `medium` / `high` / `critical`), and a **fully explainable, per-factor breakdown** of how that score was derived.
+`@ledgeroxyz/risk-sdk` is a small, dependency-free TypeScript library that turns structured facts about an asset — an invoice, a receivable pool, a property, an inventory pool, a trade finance instrument, an equipment lease — into a **0-100 risk score**, a **risk tier** (`low` / `medium` / `high` / `critical`), and a **fully explainable, per-factor breakdown** of how that score was derived.
+
+Beyond scoring a single asset, the SDK also ships **portfolio-level aggregation** (weighted averages, concentration risk, worst contributors), **model versioning & JSON serialization** (so a risk policy can be stored, diffed, and shipped as data), and a **calibration/backtesting utility** (Brier score, bucketed predicted-vs-actual default rates) for checking a model against real outcomes over time.
 
 It contains no UI, no smart contracts, and no blockchain or network calls. It is pure scoring logic, meant to be embedded in whatever underwriting pipeline, API, or tool you're building.
 
@@ -155,10 +157,18 @@ Override per-model via `RiskModel.tierThresholds`, or call `resolveTier(score, c
 
 ## Default risk models
 
-The SDK ships a sensible default `RiskModel` for each of the four built-in asset classes, available individually or via the `defaultRiskModels` lookup:
+The SDK ships a sensible default `RiskModel` for each of the six built-in asset classes, available individually or via the `defaultRiskModels` lookup:
 
 ```ts
-import { defaultRiskModels, invoiceRiskModel, receivableRiskModel, propertyRiskModel, inventoryRiskModel } from "@ledgeroxyz/risk-sdk";
+import {
+  defaultRiskModels,
+  invoiceRiskModel,
+  receivableRiskModel,
+  propertyRiskModel,
+  inventoryRiskModel,
+  tradeFinanceRiskModel,
+  equipmentLeaseRiskModel,
+} from "@ledgeroxyz/risk-sdk";
 ```
 
 | Asset class | Factors (id — description) |
@@ -167,8 +177,10 @@ import { defaultRiskModels, invoiceRiskModel, receivableRiskModel, propertyRiskM
 | `receivable` | `delinquency-rate`, `days-sales-outstanding`, `collateral-coverage`, `counterparty-concentration`, `document-completeness`, `valuation-confidence`, `jurisdiction-risk` |
 | `property` | `collateral-coverage` (loan-to-value), `asset-age`, `occupancy`, `title-defects`, `document-completeness`, `valuation-confidence`, `jurisdiction-risk` |
 | `inventory` | `turnover`, `obsolescence`, `insurance-coverage`, `asset-age`, `document-completeness`, `valuation-confidence`, `jurisdiction-risk` |
+| `trade-finance` | `issuing-bank-strength`, `documentary-discrepancies`, `tenor-risk`, `counterparty-concentration`, `document-completeness`, `valuation-confidence`, `jurisdiction-risk` |
+| `equipment-lease` | `remaining-useful-life`, `arrears`, `lessee-creditworthiness`, `utilization`, `maintenance-compliance`, `document-completeness`, `valuation-confidence`, `jurisdiction-risk` |
 
-Each model's corresponding `*Facts` type (`InvoiceFacts`, `ReceivableFacts`, `PropertyFacts`, `InventoryFacts`) documents exactly what structured input each factor expects.
+Each model's corresponding `*Facts` type (`InvoiceFacts`, `ReceivableFacts`, `PropertyFacts`, `InventoryFacts`, `TradeFinanceFacts`, `EquipmentLeaseFacts`) documents exactly what structured input each factor expects.
 
 These are **defaults, not the only option** — the whole point of the SDK is that they're fully overridable.
 
@@ -255,6 +267,134 @@ const equipmentLeaseModel: RiskModel<EquipmentLeaseFacts> = {
 const engine = createRiskEngine(equipmentLeaseModel);
 ```
 
+## Portfolio risk aggregation
+
+Once you've scored a set of individual assets, `summarizePortfolio` rolls those `ScoreResult`s up into portfolio-level metrics: an exposure-weighted average score, a tier distribution/histogram, Herfindahl-Hirschman-style concentration risk over any grouping key you supply (counterparty, asset class, jurisdiction, ...), and the worst-N contributors.
+
+```ts
+import { summarizePortfolio, scoreAsset, defaultRiskModels } from "@ledgeroxyz/risk-sdk";
+
+const portfolio = [
+  {
+    id: "inv-001",
+    result: scoreAsset(defaultRiskModels.invoice, invoiceFactsA),
+    exposure: 48_000, // e.g. face value / outstanding balance
+    groups: { counterparty: "acme-corp", assetClass: "invoice" },
+  },
+  {
+    id: "inv-002",
+    result: scoreAsset(defaultRiskModels.invoice, invoiceFactsB),
+    exposure: 12_000,
+    groups: { counterparty: "globex-inc", assetClass: "invoice" },
+  },
+  // ...
+];
+
+const summary = summarizePortfolio(portfolio, {
+  concentrationBy: ["counterparty", "assetClass"],
+  worstN: 5,
+});
+
+summary.weightedAverageScore;      // exposure-weighted mean overallScore
+summary.tierDistribution;          // per-tier count/exposure histogram
+summary.concentration;             // HHI + largest-group share, per grouping dimension
+summary.worstContributors;         // the 5 lowest-scoring entries
+```
+
+`exposure` and `groups` are both optional — omit `exposure` for an equal-weighted portfolio, and omit `concentrationBy`/`groups` if you don't need concentration analysis. The `hhi` on each `ConcentrationResult` is on a 0-1 scale (sum of squared exposure shares); multiply by 10,000 for the conventional 0-10,000 HHI scale used in credit-risk literature.
+
+## Model versioning & serialization
+
+`RiskModel.factors[].score` is a plain JS function, so a live `RiskModel` can't be `JSON.stringify`'d directly — closures don't survive serialization. `serialize.ts` introduces a declarative, JSON-safe equivalent, `SerializableRiskModel`, built entirely out of the `scoring-utils` primitives (`linearScore`/`inverseLinearScore` → `{ type: "linear", invert? }`, `stepScore` → `{ type: "step" }`, `boolScore` → `{ type: "bool" }`, plus `{ type: "clamp" }` for a direct pass-through field):
+
+```ts
+import {
+  serializeRiskModel,
+  deserializeRiskModel,
+  hydrateRiskModel,
+  diffRiskModels,
+  type SerializableRiskModel,
+} from "@ledgeroxyz/risk-sdk";
+
+const policy: SerializableRiskModel<InvoiceFacts> = {
+  version: "1.0.0",
+  assetClass: "invoice",
+  name: "Acme Corp underwriting policy",
+  factors: [
+    {
+      id: "payment-history",
+      label: "Buyer payment history",
+      weight: 40,
+      field: "buyerOnTimePaymentRatio",
+      scoring: { type: "linear", min: 0, max: 1 },
+    },
+    {
+      id: "delinquency",
+      label: "Current delinquency",
+      weight: 30,
+      field: "daysPastDue",
+      // JSON has no Infinity — use a large finite sentinel for an open-ended top band.
+      scoring: {
+        type: "step",
+        steps: [
+          { threshold: 0, score: 100 },
+          { threshold: 30, score: 50 },
+          { threshold: Number.MAX_SAFE_INTEGER, score: 0 },
+        ],
+      },
+    },
+  ],
+};
+
+// Store/ship it as JSON:
+const json = serializeRiskModel(policy);
+
+// Later, load it back and turn it into a live, scorable RiskModel:
+const restored = deserializeRiskModel<InvoiceFacts>(json);
+const engine = createRiskEngine(hydrateRiskModel(restored));
+```
+
+`diffRiskModels` compares two versions of a policy and reports what changed — added/removed factors, re-weighted factors, changed scoring specs, and tier-threshold changes — useful for reviewing a policy change before promoting it to production:
+
+```ts
+import { diffRiskModels } from "@ledgeroxyz/risk-sdk";
+
+const diff = diffRiskModels(policyV1, policyV2);
+diff.versionChanged;     // true if `version` differs
+diff.addedFactorIds;     // factor ids introduced in v2
+diff.removedFactorIds;   // factor ids dropped in v2
+diff.weightChanges;      // [{ id, fromWeight, toWeight }, ...]
+diff.scoringChanges;     // factors whose scoring spec changed
+```
+
+**Limitation:** only factors expressible via the `scoring-utils` primitives can round-trip this way. A `RiskFactor` whose `score` is a fully custom closure (arbitrary multi-field logic, closures over outside state, etc.) is not representable as a `SerializableRiskFactor` — such models have to stay in plain in-memory `RiskModel` form.
+
+## Calibration / backtesting
+
+`calibrationReport` is a standalone statistical utility for checking whether a model's scores track real-world outcomes. Feed it historical `{ predictedScore, actualOutcome }` pairs — e.g. "we scored this invoice 72 at underwriting time, and it did/didn't ultimately default" — and it returns a bucketed predicted-vs-actual default rate table, a Brier score, and a calibration-gap summary. It has no dependency on `RiskModel`/`scoreAsset`, so it works against scores from any source, not just this SDK.
+
+```ts
+import { calibrationReport } from "@ledgeroxyz/risk-sdk";
+
+const report = calibrationReport(
+  [
+    { predictedScore: 92, actualOutcome: false },
+    { predictedScore: 15, actualOutcome: true },
+    { predictedScore: 55, actualOutcome: false },
+    // ... historical (score, outcome) pairs
+  ],
+  { bucketCount: 10 }, // optional, defaults to 10 decile buckets
+);
+
+report.brierScore;                   // 0 (perfect) to 1 (worst)
+report.meanAbsoluteCalibrationGap;   // sample-weighted mean |actual - predicted| across buckets
+report.buckets;                      // per-decile predicted vs. actual default rate
+report.overallPredictedDefaultRate;  // mean predicted default probability
+report.overallActualDefaultRate;     // observed default rate
+```
+
+Each bucket's `calibrationGap` (`actualDefaultRate - predictedDefaultRate`) is positive when the model was too optimistic for that score range, and negative when it was too pessimistic.
+
 ## API overview
 
 ```ts
@@ -280,9 +420,24 @@ export const invoiceRiskModel: RiskModel<InvoiceFacts>;
 export const receivableRiskModel: RiskModel<ReceivableFacts>;
 export const propertyRiskModel: RiskModel<PropertyFacts>;
 export const inventoryRiskModel: RiskModel<InventoryFacts>;
+export const tradeFinanceRiskModel: RiskModel<TradeFinanceFacts>;
+export const equipmentLeaseRiskModel: RiskModel<EquipmentLeaseFacts>;
+
+// Portfolio aggregation
+export function summarizePortfolio(entries: PortfolioEntry[], options?: PortfolioSummaryOptions): PortfolioSummary;
+
+// Model versioning & serialization
+export function hydrateRiskModel<TFacts>(model: SerializableRiskModel<TFacts>): RiskModel<TFacts>;
+export function serializeRiskModel<TFacts>(model: SerializableRiskModel<TFacts>, space?: string | number): string;
+export function deserializeRiskModel<TFacts>(json: string): SerializableRiskModel<TFacts>;
+export function validateSerializableModel<TFacts>(model: SerializableRiskModel<TFacts>): void;
+export function diffRiskModels<TFacts>(from: SerializableRiskModel<TFacts>, to: SerializableRiskModel<TFacts>): RiskModelDiff;
+
+// Calibration / backtesting
+export function calibrationReport(samples: CalibrationSample[], options?: CalibrationOptions): CalibrationReport;
 
 // Types
-export type AssetClass = "invoice" | "receivable" | "property" | "inventory";
+export type AssetClass = "invoice" | "receivable" | "property" | "inventory" | "trade-finance" | "equipment-lease";
 export type RiskTier = "low" | "medium" | "high" | "critical";
 export interface RiskTierThreshold { tier: RiskTier; minScore: number; }
 export interface RiskFactor<TFacts> { id: string; label: string; description?: string; weight: number; score: (facts: TFacts) => number; }
@@ -290,6 +445,22 @@ export interface RiskModel<TFacts> { assetClass: AssetClass; name?: string; desc
 export interface FactorContribution { id: string; label: string; weight: number; normalizedWeight: number; subScore: number; contribution: number; }
 export interface ScoreResult { assetClass: AssetClass; overallScore: number; tier: RiskTier; breakdown: FactorContribution[]; }
 export class RiskModelError extends Error {}
+
+// Portfolio types
+export interface PortfolioEntry { result: ScoreResult; exposure?: number; id?: string; groups?: Record<string, string>; }
+export interface PortfolioSummaryOptions { concentrationBy?: string[]; worstN?: number; }
+export interface PortfolioSummary { count: number; totalExposure: number; averageScore: number; weightedAverageScore: number; tierDistribution: TierDistributionEntry[]; concentration: ConcentrationResult[]; worstContributors: WorstContributor[]; }
+
+// Serialization types
+export type SerializableScoringSpec = { type: "linear"; min: number; max: number; invert?: boolean } | { type: "step"; steps: ScoreStep[] } | { type: "bool"; trueScore: number; falseScore: number } | { type: "clamp" };
+export interface SerializableRiskFactor<TFacts> { id: string; label: string; description?: string; weight: number; field: Extract<keyof TFacts, string>; scoring: SerializableScoringSpec; }
+export interface SerializableRiskModel<TFacts> { version: string; assetClass: AssetClass; name?: string; description?: string; factors: SerializableRiskFactor<TFacts>[]; tierThresholds?: RiskTierThreshold[]; }
+export interface RiskModelDiff { fromVersion: string; toVersion: string; versionChanged: boolean; addedFactorIds: string[]; removedFactorIds: string[]; weightChanges: FactorWeightChange[]; fieldChanges: FactorFieldChange[]; scoringChanges: FactorScoringChange[]; tierThresholdsChanged: boolean; }
+
+// Calibration types
+export interface CalibrationSample { predictedScore: number; actualOutcome: boolean; }
+export interface CalibrationOptions { bucketCount?: number; }
+export interface CalibrationReport { sampleCount: number; brierScore: number; buckets: CalibrationBucket[]; meanAbsoluteCalibrationGap: number; overallPredictedDefaultRate: number; overallActualDefaultRate: number; }
 ```
 
 ## Development
