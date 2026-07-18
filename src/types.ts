@@ -10,9 +10,15 @@
 /**
  * Supported real-world-asset classes. Extend this union (and provide a
  * matching `RiskModel<TFacts>`) to support additional asset classes —
- * the engine itself is not hardcoded to these four.
+ * the engine itself is not hardcoded to these six.
  */
-export type AssetClass = "invoice" | "receivable" | "property" | "inventory";
+export type AssetClass =
+  | "invoice"
+  | "receivable"
+  | "property"
+  | "inventory"
+  | "trade-finance"
+  | "equipment-lease";
 
 /**
  * Qualitative risk bucket derived from the overall 0-100 score.
