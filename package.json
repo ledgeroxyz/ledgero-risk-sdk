@@ -1,0 +1,61 @@
+{
+  "name": "@ledgeroxyz/risk-sdk",
+  "version": "0.1.0",
+  "description": "Configurable, explainable risk-scoring engine for real-world-asset (RWA) underwriting — the standalone scoring library behind LEDGERO ($LDGR).",
+  "type": "module",
+  "license": "MIT",
+  "author": "ledgeroxyz",
+  "homepage": "https://ledgero.xyz",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ledgeroxyz/ledgero-risk-sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/ledgeroxyz/ledgero-risk-sdk/issues"
+  },
+  "keywords": [
+    "risk",
+    "risk-scoring",
+    "underwriting",
+    "rwa",
+    "real-world-assets",
+    "tokenization",
+    "ledgero",
+    "typescript"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo \"no linter configured\"",
+    "prepublishOnly": "pnpm run build"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^2.1.8",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
