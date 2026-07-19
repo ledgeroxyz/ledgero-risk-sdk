@@ -10,15 +10,22 @@
 /**
  * Supported real-world-asset classes. Extend this union (and provide a
  * matching `RiskModel<TFacts>`) to support additional asset classes —
- * the engine itself is not hardcoded to these six.
+ * the engine itself is not hardcoded to these classes.
+ *
+ * This vocabulary is a superset of the LEDGERO dapp's asset classes
+ * (`invoice`, `receivable`, `real_estate`, `inventory`, `other`) so the
+ * dapp can adopt the SDK directly. `property` is kept as an alias for the
+ * dapp-aligned `real_estate` name — both resolve to the same default model.
  */
 export type AssetClass =
   | "invoice"
   | "receivable"
   | "property"
+  | "real_estate"
   | "inventory"
   | "trade-finance"
-  | "equipment-lease";
+  | "equipment-lease"
+  | "other";
 
 /**
  * Qualitative risk bucket derived from the overall 0-100 score.
