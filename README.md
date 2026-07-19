@@ -2,7 +2,7 @@
 
 A configurable, explainable risk-scoring engine for real-world-asset (RWA) underwriting.
 
-`@ledgeroxyz/risk-sdk` is a small, dependency-free TypeScript library that turns structured facts about an asset — an invoice, a receivable pool, a property, an inventory pool, a trade finance instrument, an equipment lease — into a **0-100 risk score**, a **risk tier** (`low` / `medium` / `high` / `critical`), and a **fully explainable, per-factor breakdown** of how that score was derived.
+`@ledgeroxyz/risk-sdk` is a small, dependency-free TypeScript library that turns structured facts about an asset — an invoice, a receivable pool, real estate, an inventory pool, a trade finance instrument, an equipment lease, or any generic asset — into a **0-100 risk score**, a **risk tier** (`low` / `medium` / `high` / `critical`), a **dapp-aligned letter grade** (`A` / `B` / `C` / `D`), and a **fully explainable, per-factor breakdown** of how that score was derived.
 
 Beyond scoring a single asset, the SDK also ships **portfolio-level aggregation** (weighted averages, concentration risk, worst contributors), **model versioning & JSON serialization** (so a risk policy can be stored, diffed, and shipped as data), and a **calibration/backtesting utility** (Brier score, bucketed predicted-vs-actual default rates) for checking a model against real outcomes over time.
 
@@ -47,6 +47,7 @@ const result = engine.score(facts);
 
 console.log(result.overallScore); // e.g. 87.4
 console.log(result.tier);         // "low"
+console.log(result.letterGrade);  // "A" — dapp-aligned rating (>=80 A, >=60 B, >=40 C, else D)
 console.log(result.breakdown);
 // [
 //   { id: "payment-history", label: "Buyer payment history", weight: 25, normalizedWeight: 0.25, subScore: 92, contribution: 23 },
@@ -157,7 +158,7 @@ Override per-model via `RiskModel.tierThresholds`, or call `resolveTier(score, c
 
 ## Default risk models
 
-The SDK ships a sensible default `RiskModel` for each of the six built-in asset classes, available individually or via the `defaultRiskModels` lookup:
+The SDK ships a sensible default `RiskModel` for each built-in asset class, available individually or via the `defaultRiskModels` lookup:
 
 ```ts
 import {
@@ -165,9 +166,11 @@ import {
   invoiceRiskModel,
   receivableRiskModel,
   propertyRiskModel,
+  realEstateRiskModel,
   inventoryRiskModel,
   tradeFinanceRiskModel,
   equipmentLeaseRiskModel,
+  otherRiskModel,
 } from "@ledgeroxyz/risk-sdk";
 ```
 
@@ -175,14 +178,68 @@ import {
 |---|---|
 | `invoice` | `payment-history`, `delinquency`, `counterparty-concentration`, `document-completeness`, `valuation-confidence`, `jurisdiction-risk` |
 | `receivable` | `delinquency-rate`, `days-sales-outstanding`, `collateral-coverage`, `counterparty-concentration`, `document-completeness`, `valuation-confidence`, `jurisdiction-risk` |
-| `property` | `collateral-coverage` (loan-to-value), `asset-age`, `occupancy`, `title-defects`, `document-completeness`, `valuation-confidence`, `jurisdiction-risk` |
+| `property` / `real_estate` | `collateral-coverage` (loan-to-value), `asset-age`, `occupancy`, `title-defects`, `document-completeness`, `valuation-confidence`, `jurisdiction-risk` |
 | `inventory` | `turnover`, `obsolescence`, `insurance-coverage`, `asset-age`, `document-completeness`, `valuation-confidence`, `jurisdiction-risk` |
 | `trade-finance` | `issuing-bank-strength`, `documentary-discrepancies`, `tenor-risk`, `counterparty-concentration`, `document-completeness`, `valuation-confidence`, `jurisdiction-risk` |
 | `equipment-lease` | `remaining-useful-life`, `arrears`, `lessee-creditworthiness`, `utilization`, `maintenance-compliance`, `document-completeness`, `valuation-confidence`, `jurisdiction-risk` |
+| `other` | `document-completeness`, `counterparty-known`, `claimed-value`, `valuation-confidence` |
 
-Each model's corresponding `*Facts` type (`InvoiceFacts`, `ReceivableFacts`, `PropertyFacts`, `InventoryFacts`, `TradeFinanceFacts`, `EquipmentLeaseFacts`) documents exactly what structured input each factor expects.
+Each model's corresponding `*Facts` type (`InvoiceFacts`, `ReceivableFacts`, `PropertyFacts`, `RealEstateFacts`, `InventoryFacts`, `TradeFinanceFacts`, `EquipmentLeaseFacts`, `OtherFacts`) documents exactly what structured input each factor expects.
+
+`real_estate` is the [LEDGERO dapp](#using-with-the-ledgero-dapp)'s canonical name for the `property` model — `realEstateRiskModel` reuses the same factors and weights, differing only in its `assetClass`. `other` is a generic fallback for assets that don't fit a specific class, built from class-agnostic signals with conservative defaults.
 
 These are **defaults, not the only option** — the whole point of the SDK is that they're fully overridable.
+
+## Using with the LEDGERO dapp
+
+The SDK is aligned with the [LEDGERO dapp](https://ledgero.xyz)'s underwriting domain model so the dapp can adopt it directly — with no reshaping of the scoring output. Three things line up:
+
+**1. Asset classes.** The dapp's asset classes are `invoice`, `receivable`, `real_estate`, `inventory`, and `other`. The SDK's `AssetClass` union is a **superset** of these, so any dapp asset class maps straight to a default model via `defaultRiskModels[assetClass]`. (`property` is retained as an alias of `real_estate` for existing SDK callers; the two share factors and weights.)
+
+**2. Letter grades.** The dapp presents a single letter `rating` (`A`/`B`/`C`/`D`) rather than the SDK's four-tier ladder. Every `ScoreResult` now carries a `letterGrade` field computed with the dapp's exact thresholds (`>=80` → `A`, `>=60` → `B`, `>=40` → `C`, else `D`). Use `toLetterGrade(score)` to grade any score directly, or `tierToLetterGrade(tier)` to map an existing `RiskTier`.
+
+**3. Factor shape.** The dapp renders each factor as `{ label, impact, detail }`, where `impact` is `"positive" | "negative" | "neutral"`. `toDappRiskFactors(result)` converts the SDK's weighted `breakdown` into exactly that shape — the returned array can be stored straight into the dapp's `factorsJson` column and read back with no transform.
+
+```ts
+import {
+  scoreAsset,
+  defaultRiskModels,
+  toDappRiskFactors,
+  type RealEstateFacts,
+} from "@ledgeroxyz/risk-sdk";
+
+// The dapp already has an asset class (e.g. "real_estate") and structured facts.
+const facts: RealEstateFacts = {
+  appraisedValue: 1_200_000,
+  outstandingLoanAmount: 400_000,
+  propertyAgeYears: 12,
+  occupancyRatio: 0.95,
+  titleDefects: false,
+  documentCompleteness: 1,
+  extractionConfidence: 0.9,
+  jurisdictionRiskScore: 80,
+};
+
+const result = scoreAsset(defaultRiskModels.real_estate, facts);
+
+// Persist the dapp's asset record straight from the SDK result:
+const dappRecord = {
+  riskScore: Math.round(result.overallScore), // 0-100
+  rating: result.letterGrade,                 // "A" | "B" | "C" | "D"
+  factorsJson: JSON.stringify(toDappRiskFactors(result)),
+};
+
+// toDappRiskFactors(result) →
+// [
+//   { label: "Collateral coverage ratio", impact: "positive",
+//     detail: "Collateral coverage ratio scored 100/100 (30% of the overall weight) — supports the asset." },
+//   { label: "Title defects", impact: "positive",
+//     detail: "Title defects scored 100/100 (15% of the overall weight) — supports the asset." },
+//   ...
+// ]
+```
+
+`toDappRiskFactors` accepts an options object to tune the neutral band — sub-scores strictly above `neutralHigh` (default 55) read as `positive`, strictly below `neutralLow` (default 45) as `negative`, and anything in between as `neutral`.
 
 ## Defining a custom risk model
 
@@ -407,6 +464,14 @@ export function mergeRiskModel<TFacts>(base: RiskModel<TFacts>, overrides: RiskM
 export const defaultTierThresholds: RiskTierThreshold[];
 export function resolveTier(score: number, thresholds?: RiskTierThreshold[]): RiskTier;
 
+// Letter grades (dapp-aligned)
+export function toLetterGrade(score: number): LetterGrade;
+export function tierToLetterGrade(tier: RiskTier): LetterGrade;
+
+// Dapp adapter
+export function toDappRiskFactors(result: ScoreResult, options?: DappAdapterOptions): DappRiskFactor[];
+export function toDappRiskFactor(factor: FactorContribution, options?: DappAdapterOptions): DappRiskFactor;
+
 // Scoring helpers
 export function clampScore(value: number): number;
 export function linearScore(value: number, options: LinearScoreOptions): number;
@@ -419,9 +484,11 @@ export const defaultRiskModels: Record<AssetClass, RiskModel<any>>;
 export const invoiceRiskModel: RiskModel<InvoiceFacts>;
 export const receivableRiskModel: RiskModel<ReceivableFacts>;
 export const propertyRiskModel: RiskModel<PropertyFacts>;
+export const realEstateRiskModel: RiskModel<RealEstateFacts>;
 export const inventoryRiskModel: RiskModel<InventoryFacts>;
 export const tradeFinanceRiskModel: RiskModel<TradeFinanceFacts>;
 export const equipmentLeaseRiskModel: RiskModel<EquipmentLeaseFacts>;
+export const otherRiskModel: RiskModel<OtherFacts>;
 
 // Portfolio aggregation
 export function summarizePortfolio(entries: PortfolioEntry[], options?: PortfolioSummaryOptions): PortfolioSummary;
@@ -437,14 +504,19 @@ export function diffRiskModels<TFacts>(from: SerializableRiskModel<TFacts>, to: 
 export function calibrationReport(samples: CalibrationSample[], options?: CalibrationOptions): CalibrationReport;
 
 // Types
-export type AssetClass = "invoice" | "receivable" | "property" | "inventory" | "trade-finance" | "equipment-lease";
+export type AssetClass = "invoice" | "receivable" | "property" | "real_estate" | "inventory" | "trade-finance" | "equipment-lease" | "other";
 export type RiskTier = "low" | "medium" | "high" | "critical";
+export type LetterGrade = "A" | "B" | "C" | "D";
 export interface RiskTierThreshold { tier: RiskTier; minScore: number; }
 export interface RiskFactor<TFacts> { id: string; label: string; description?: string; weight: number; score: (facts: TFacts) => number; }
 export interface RiskModel<TFacts> { assetClass: AssetClass; name?: string; description?: string; factors: RiskFactor<TFacts>[]; tierThresholds?: RiskTierThreshold[]; }
 export interface FactorContribution { id: string; label: string; weight: number; normalizedWeight: number; subScore: number; contribution: number; }
-export interface ScoreResult { assetClass: AssetClass; overallScore: number; tier: RiskTier; breakdown: FactorContribution[]; }
+export interface ScoreResult { assetClass: AssetClass; overallScore: number; tier: RiskTier; letterGrade: LetterGrade; breakdown: FactorContribution[]; }
 export class RiskModelError extends Error {}
+
+// Dapp adapter types
+export interface DappRiskFactor { label: string; impact: "positive" | "negative" | "neutral"; detail: string; }
+export interface DappAdapterOptions { neutralLow?: number; neutralHigh?: number; }
 
 // Portfolio types
 export interface PortfolioEntry { result: ScoreResult; exposure?: number; id?: string; groups?: Record<string, string>; }
