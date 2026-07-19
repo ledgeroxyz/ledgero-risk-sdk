@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { summarizePortfolio, type PortfolioEntry } from "../src/portfolio.js";
 import { RiskModelError, type ScoreResult } from "../src/types.js";
+import { toLetterGrade } from "../src/grade.js";
 
 function makeResult(overallScore: number, tier: ScoreResult["tier"]): ScoreResult {
   return {
     assetClass: "invoice",
     overallScore,
     tier,
+    letterGrade: toLetterGrade(overallScore),
     breakdown: [],
   };
 }

@@ -6,6 +6,7 @@ import {
   type ScoreResult,
 } from "./types.js";
 import { defaultTierThresholds, resolveTier } from "./tiers.js";
+import { toLetterGrade } from "./grade.js";
 
 function clamp0to100(value: number): number {
   return Math.min(100, Math.max(0, value));
@@ -89,6 +90,7 @@ export function scoreAsset<TFacts>(
     assetClass: model.assetClass,
     overallScore,
     tier,
+    letterGrade: toLetterGrade(overallScore),
     breakdown,
   };
 }

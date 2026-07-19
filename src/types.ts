@@ -33,6 +33,12 @@ export type AssetClass =
 export type RiskTier = "low" | "medium" | "high" | "critical";
 
 /**
+ * Dapp-aligned letter rating (A/B/C/D) derived from the overall 0-100
+ * score. See `grade.ts` for the mapping and its thresholds.
+ */
+export type LetterGrade = "A" | "B" | "C" | "D";
+
+/**
  * A single boundary in a tier ladder: any overall score `>= minScore`
  * (and below the next-higher threshold's `minScore`) is classified as
  * `tier`.
@@ -112,6 +118,13 @@ export interface ScoreResult {
   overallScore: number;
   /** Risk tier derived from `overallScore` via the model's tier thresholds. */
   tier: RiskTier;
+  /**
+   * Dapp-aligned letter grade (A/B/C/D) derived from `overallScore` via
+   * the dapp's fixed thresholds (>=80 A, >=60 B, >=40 C, else D). This is
+   * additive and independent of the model's `tierThresholds` — it always
+   * uses the dapp's ladder so the two systems agree. See `toLetterGrade`.
+   */
+  letterGrade: LetterGrade;
   /** Per-factor breakdown explaining how `overallScore` was derived. */
   breakdown: FactorContribution[];
 }
