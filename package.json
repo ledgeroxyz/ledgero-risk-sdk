@@ -1,7 +1,7 @@
 {
   "name": "@ledgeroxyz/risk-sdk",
   "version": "0.3.0",
-  "description": "Configurable, explainable risk-scoring engine for real-world-asset (RWA) underwriting — the standalone scoring library behind LEDGERO ($LDGR).",
+  "description": "Configurable, explainable risk-scoring engine for real-world-asset (RWA) underwriting — the standalone scoring library behind LEDGERO ($LEDGER).",
   "type": "module",
   "license": "MIT",
   "author": "ledgeroxyz",

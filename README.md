@@ -10,7 +10,7 @@ It contains no UI, no smart contracts, and no blockchain or network calls. It is
 
 ## Why this exists
 
-[LEDGERO](https://ledgero.xyz) (`$LDGR`) is an AI underwriting agent for RWA tokenization. Its pipeline ingests source documents for a candidate asset, extracts structured fields via OCR, cross-references external data, runs a structured risk assessment against a risk model for that asset class, and emits a signed on-chain attestation.
+[LEDGERO](https://ledgero.xyz) (`$LEDGER`) is an AI underwriting agent for RWA tokenization. Its pipeline ingests source documents for a candidate asset, extracts structured fields via OCR, cross-references external data, runs a structured risk assessment against a risk model for that asset class, and emits a signed on-chain attestation.
 
 `@ledgeroxyz/risk-sdk` is the standalone risk-**scoring** component extracted from that pipeline — the part that takes structured facts and a risk model and produces a scored, explainable result. It's published separately, under its own license, specifically so that it's useful to anyone building their own underwriting tooling, not just LEDGERO's own agent. If you're building a credit engine, a diligence tool, or any system that needs to turn weighted risk factors into a defensible score, this library is meant to be a solid, general-purpose building block for that — no LEDGERO-specific assumptions required.
 
